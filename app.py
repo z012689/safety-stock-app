@@ -1,316 +1,247 @@
-"""
-产品安全库存管理系统
-功能：支持多种文件格式，自动计算安全库存，月度更新
-"""
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
-import re
 
-# ==================== 页面设置 ====================
-st.set_page_config(
-    page_title="产品安全库存管理系统", 
-    layout="wide", 
-    page_icon="📦",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="产品安全库存管理系统", layout="wide", page_icon="📦")
 
-# ==================== 自定义CSS样式 ====================
-st.markdown("""
-<style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    
-    .main-title {
-        font-size: 2.5rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0.5rem;
-    }
-    
-    .sub-title {
-        font-size: 1rem;
-        color: #6c757d;
-        margin-bottom: 2rem;
-    }
-    
-    .kpi-card {
-        background: white;
-        padding: 15px;
-        border-radius: 12px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        transition: transform 0.2s;
-    }
-    .kpi-card:hover {
-        transform: translateY(-3px);
-    }
-</style>
-""", unsafe_allow_html=True)
+st.title("📦 产品安全库存管理系统")
+st.caption("支持月度数据更新 | 自动计算安全库存 | 智能预警")
 
-# ==================== 标题 ====================
-st.markdown('<div class="main-title">📦 产品安全库存管理系统</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">支持月度数据更新 | 自动计算安全库存 | 智能预警 | 多维度分析</div>', unsafe_allow_html=True)
-
-# ==================== 侧边栏 ====================
 with st.sidebar:
-    st.markdown("### 📂 数据上传")
+    st.header("📂 数据上传")
     uploaded_file = st.file_uploader(
-        "上传文件",
-        type=["xlsx", "xls", "csv"],
-        label_visibility="collapsed",
-        help="支持 .xlsx, .xls, .csv 格式"
+        "上传 Excel 文件",
+        type=["xlsx", "xls"],
+        help="上传安全库存分析-2025.xlsx 格式的文件"
     )
-    
-    st.markdown("---")
-    st.markdown("### 🎨 系统特色")
+    st.divider()
+    st.markdown("### 📌 月度更新说明")
     st.markdown("""
-    - 🔄 **月度自动更新**
-    - 📊 **实时库存监控**
-    - ⚠️ **智能风险预警**
-    - 📈 **多维度数据分析**
-    - 💾 **一键导出报表**
+    - 每月更新Excel中的销量数据后，重新上传即可
+    - 系统会自动识别最新月份并重新计算
+    - 无需修改任何代码
     """)
 
-# ==================== 数据加载 ====================
 @st.cache_data
-def load_file_data(file):
-    file_name = file.name.lower()
-    
+def load_safety_data(file):
+    """加载安全库存数据"""
     try:
-        if file_name.endswith('.csv'):
-            df = pd.read_csv(file, encoding='utf-8')
-            if df.columns.str.contains('Unnamed').any():
-                df = pd.read_csv(file, encoding='gbk')
-        elif file_name.endswith(('.xlsx', '.xls')):
-            df = pd.read_excel(file, sheet_name="安全库存（202509月）", header=2)
-            df.columns = [str(col).strip() for col in df.columns]
-            if df is not None and len(df) > 0:
-                return df
+        # 尝试多种方式读取
+        df = pd.read_excel(file, sheet_name="安全库存（202509月）", header=None)
+        
+        # 寻找包含"物料编码"的行作为列名
+        header_row = None
+        for i, row in df.iterrows():
+            row_str = row.astype(str).str.contains("物料编码")
+            if row_str.any():
+                header_row = i
+                break
+        
+        if header_row is not None:
+            df.columns = df.iloc[header_row]
+            df = df.iloc[header_row + 1:].reset_index(drop=True)
         else:
-            return None
+            # 备用方案：直接读取
+            df = pd.read_excel(file, sheet_name="安全库存（202509月）", header=2)
+        
         return df
     except Exception as e:
-        st.error(f"文件读取失败：{e}")
+        st.error(f"读取安全库存数据失败：{e}")
         return None
 
-# ==================== 主程序 ====================
+@st.cache_data
+def load_packaging_data(file):
+    """加载包材安全库存数据"""
+    try:
+        df = pd.read_excel(file, sheet_name="包材安全库存", header=None)
+        # 寻找包含"建议安全库存"的行
+        for i, row in df.iterrows():
+            if "建议安全库存" in row.astype(str).values:
+                df.columns = df.iloc[i]
+                df = df.iloc[i+1:].reset_index(drop=True)
+                break
+        return df
+    except:
+        return None
+
 if uploaded_file is not None:
-    with st.spinner("🔄 正在加载数据，请稍候..."):
-        df = load_file_data(uploaded_file)
+    with st.spinner("正在加载数据..."):
+        df_safety = load_safety_data(uploaded_file)
+        df_packaging = load_packaging_data(uploaded_file)
     
-    if df is not None and len(df) > 0:
-        # 识别关键列
-        material_col = None
-        for col in df.columns:
-            if '物料编码' in str(col) or '物料代码' in str(col):
-                material_col = col
-                break
-        if material_col is None:
-            material_col = df.columns[0]
+    if df_safety is not None and len(df_safety) > 0:
+        # 重命名列以便使用
+        df_safety = df_safety.rename(columns={
+            "安全库存\n（最终结果）": "安全库存",
+            "6月末实际库存": "实际库存"
+        })
         
-        safety_col = None
-        for col in df.columns:
-            if '安全库存' in str(col):
-                safety_col = col
-                break
-        
-        actual_col = None
-        for col in df.columns:
-            if '实际库存' in str(col) or '6月末实际库存' in str(col):
-                actual_col = col
-                break
-        
-        # 重命名列
-        if material_col:
-            df = df.rename(columns={material_col: "物料编码"})
-        if safety_col:
-            df = df.rename(columns={safety_col: "安全库存"})
-            df["安全库存"] = pd.to_numeric(df["安全库存"], errors="coerce").fillna(0)
-        else:
-            df["安全库存"] = 0
-        
-        if actual_col:
-            df = df.rename(columns={actual_col: "实际库存"})
-            df["实际库存"] = pd.to_numeric(df["实际库存"], errors="coerce").fillna(0)
-        else:
-            df["实际库存"] = 0
-        
-        # 清理数据
-        df = df.dropna(subset=["物料编码"], how="all")
-        df = df[df["物料编码"].notna()]
-        df = df[df["物料编码"].astype(str).str.len() > 0]
+        # 转换数值列
+        for col in ["安全库存", "实际库存"]:
+            if col in df_safety.columns:
+                df_safety[col] = pd.to_numeric(df_safety[col], errors="coerce").fillna(0)
         
         # 计算库存状态
-        def get_status(row):
-            if row["安全库存"] <= 0:
-                return "⚪ 未设置"
-            elif row["实际库存"] < row["安全库存"]:
-                return "🔴 低于安全库存"
-            elif row["实际库存"] <= row["安全库存"] * 1.2:
-                return "🟡 临界状态"
-            else:
-                return "🟢 库存充足"
+        df_safety["库存状态"] = df_safety.apply(
+            lambda row: "⚠️ 低于安全库存" if row["实际库存"] < row["安全库存"] and row["安全库存"] > 0 else "✅ 库存充足",
+            axis=1
+        )
         
-        df["库存状态"] = df.apply(get_status, axis=1)
-        df["缺货风险"] = ((df["安全库存"] - df["实际库存"]) / df["安全库存"] * 100).clip(lower=0).round(1)
-        df["缺货风险"] = df["缺货风险"].fillna(0).astype(int)
-        df["库存健康度"] = (df["实际库存"] / df["安全库存"]).round(2)
-        df["库存健康度"] = df["库存健康度"].replace([np.inf, -np.inf], 0).fillna(0)
+        # 计算缺货风险百分比
+        df_safety["缺货风险"] = ((df_safety["安全库存"] - df_safety["实际库存"]) / df_safety["安全库存"] * 100).clip(lower=0).round(1)
+        df_safety["缺货风险"] = df_safety["缺货风险"].fillna(0).astype(int)
         
         # KPI 卡片
-        total = len(df)
-        risk_count = len(df[df["库存状态"] == "🔴 低于安全库存"])
-        warning_count = len(df[df["库存状态"] == "🟡 临界状态"])
-        healthy_count = len(df[df["库存状态"] == "🟢 库存充足"])
-        avg_safety = df["安全库存"].mean()
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
+            total = len(df_safety)
             st.metric("📦 物料总数", total)
         with col2:
-            st.metric("🔴 低库存预警", risk_count, delta=f"{round(risk_count/total*100)}%" if total>0 else "0")
+            risk = len(df_safety[df_safety["库存状态"] == "⚠️ 低于安全库存"])
+            st.metric("⚠️ 低库存预警", risk, delta=f"占{round(risk/total*100)}%" if total>0 else "0")
         with col3:
-            st.metric("🟡 临界状态", warning_count)
-        with col4:
-            st.metric("🟢 库存充足", healthy_count)
-        with col5:
+            avg_safety = df_safety["安全库存"].mean() if "安全库存" in df_safety else 0
             st.metric("📊 平均安全库存", f"{avg_safety:.0f} 件")
+        with col4:
+            if "安全库存" in df_safety:
+                valid = df_safety[df_safety["安全库存"] > 0]
+                if len(valid) > 0:
+                    coverage = (valid["实际库存"] / valid["安全库存"]).mean()
+                    st.metric("⏱️ 平均库存覆盖倍数", f"{coverage:.1f} 倍")
+                else:
+                    st.metric("⏱️ 平均库存覆盖倍数", "N/A")
         
-        st.markdown("---")
+        st.divider()
         
         # 标签页
-        tab1, tab2, tab3, tab4 = st.tabs(["📋 物料总览", "⚠️ 低库存预警", "📊 数据分析", "📈 趋势洞察"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📋 物料安全库存总览", "⚠️ 低库存预警", "📊 数据分析", "📦 包材安全库存"])
         
-        # Tab 1
+        # Tab 1: 物料总览
         with tab1:
-            st.subheader("📋 物料安全库存一览")
+            st.subheader("所有物料安全库存一览")
             
-            col_f1, col_f2, col_f3 = st.columns(3)
+            col_f1, col_f2 = st.columns(2)
             with col_f1:
-                status_filter = st.multiselect("🔍 按状态筛选", options=df["库存状态"].unique(), default=df["库存状态"].unique())
+                status_filter = st.multiselect(
+                    "库存状态筛选",
+                    options=df_safety["库存状态"].unique(),
+                    default=df_safety["库存状态"].unique()
+                )
             with col_f2:
-                search = st.text_input("🔎 搜索物料编码", placeholder="输入物料编码...")
-            with col_f3:
-                sort_by = st.selectbox("📌 排序方式", ["缺货风险(高到低)", "安全库存(高到低)", "实际库存(高到低)"])
+                search = st.text_input("🔍 搜索物料编码", placeholder="输入物料编码...")
             
-            filtered_df = df[df["库存状态"].isin(status_filter)]
+            filtered_df = df_safety[df_safety["库存状态"].isin(status_filter)]
             if search:
                 filtered_df = filtered_df[filtered_df["物料编码"].astype(str).str.contains(search, na=False)]
             
-            if sort_by == "缺货风险(高到低)":
-                filtered_df = filtered_df.sort_values("缺货风险", ascending=False)
-            elif sort_by == "安全库存(高到低)":
-                filtered_df = filtered_df.sort_values("安全库存", ascending=False)
-            elif sort_by == "实际库存(高到低)":
-                filtered_df = filtered_df.sort_values("实际库存", ascending=False)
-            
-            display_cols = ["物料编码", "安全库存", "实际库存", "库存状态", "缺货风险", "库存健康度"]
+            display_cols = ["物料编码", "安全库存", "实际库存", "库存状态", "缺货风险"]
             available_cols = [c for c in display_cols if c in filtered_df.columns]
             
-            # 修复：applymap 改成 map
-            def color_status(val):
-                if "🔴" in str(val):
-                    return "background-color: #f8d7da; color: #721c24;"
-                elif "🟡" in str(val):
-                    return "background-color: #fff3cd; color: #856404;"
-                elif "🟢" in str(val):
-                    return "background-color: #d4edda; color: #155724;"
-                return ""
+            def highlight_risk(row):
+                if row["库存状态"] == "⚠️ 低于安全库存":
+                    return ["background-color: #ffcccc"] * len(row)
+                return [""] * len(row)
             
-            styled_df = filtered_df[available_cols].style.map(color_status, subset=["库存状态"])
-            st.dataframe(styled_df, use_container_width=True, height=500)
+            st.dataframe(
+                filtered_df[available_cols].style.apply(highlight_risk, axis=1),
+                use_container_width=True,
+                height=500
+            )
             
+            # 导出功能
             output = BytesIO()
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
                 filtered_df.to_excel(writer, index=False, sheet_name="安全库存明细")
-            st.download_button(label="📎 导出数据", data=output.getvalue(), file_name="安全库存明细.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button(
+                label="📎 导出当前数据",
+                data=output.getvalue(),
+                file_name="安全库存明细.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         
-        # Tab 2
+        # Tab 2: 低库存预警
         with tab2:
             st.subheader("⚠️ 低于安全库存的物料清单")
-            alert_df = df[df["库存状态"] == "🔴 低于安全库存"].copy()
+            alert_df = df_safety[df_safety["库存状态"] == "⚠️ 低于安全库存"].copy()
             if len(alert_df) > 0:
                 alert_df = alert_df.sort_values("缺货风险", ascending=False)
-                alert_cols = ["物料编码", "实际库存", "安全库存", "缺货风险", "库存健康度"]
+                alert_cols = ["物料编码", "实际库存", "安全库存", "缺货风险"]
                 available_alert = [c for c in alert_cols if c in alert_df.columns]
                 st.dataframe(alert_df[available_alert], use_container_width=True)
                 
-                if len(alert_df) > 0:
+                if "缺货风险" in alert_df.columns and len(alert_df) > 0:
                     top10 = alert_df.head(10)
-                    fig = px.bar(top10, x="物料编码", y="缺货风险", title="🔴 缺货风险最高的10种物料", labels={"缺货风险": "缺货风险 (%)"}, color="缺货风险", color_continuous_scale="reds", text="缺货风险")
-                    fig.update_traces(textposition="outside")
-                    fig.update_layout(height=450)
+                    fig = px.bar(
+                        top10, x="物料编码", y="缺货风险",
+                        title="缺货风险最高的10种物料",
+                        labels={"缺货风险": "缺货风险 (%)"},
+                        color="缺货风险", color_continuous_scale="reds"
+                    )
                     st.plotly_chart(fig, use_container_width=True)
-                    
-                    alert_df["建议补货量"] = (alert_df["安全库存"] - alert_df["实际库存"]).round(0).astype(int)
-                    st.subheader("📦 建议补货量")
-                    st.dataframe(alert_df[["物料编码", "实际库存", "安全库存", "建议补货量"]].head(20), use_container_width=True)
             else:
                 st.success("🎉 所有物料库存充足！")
         
-        # Tab 3
+        # Tab 3: 数据分析
         with tab3:
-            st.subheader("📊 库存状态分布")
+            st.subheader("库存状态分布")
             col_ch1, col_ch2 = st.columns(2)
-            with col_ch1:
-                status_counts = df["库存状态"].value_counts()
-                if len(status_counts) > 0:
-                    fig_pie = px.pie(values=status_counts.values, names=status_counts.index, title="库存状态占比", color_discrete_sequence=["#e74c3c", "#f39c12", "#2ecc71", "#95a5a6"], hole=0.4)
-                    fig_pie.update_layout(height=450)
-                    st.plotly_chart(fig_pie, use_container_width=True)
-            with col_ch2:
-                safety_data = df[df["安全库存"] > 0]["安全库存"]
-                if len(safety_data) > 0:
-                    fig_hist = px.histogram(safety_data, nbins=30, title="安全库存值分布", labels={"value": "安全库存", "count": "物料数量"}, color_discrete_sequence=["#3498db"], opacity=0.7)
-                    fig_hist.update_layout(height=450)
-                    st.plotly_chart(fig_hist, use_container_width=True)
             
-            st.subheader("📊 实际库存 vs 安全库存对比（前30个物料）")
-            compare_df = df[["物料编码", "实际库存", "安全库存"]].dropna().head(30)
+            with col_ch1:
+                status_counts = df_safety["库存状态"].value_counts()
+                if len(status_counts) > 0:
+                    fig_pie = px.pie(
+                        values=status_counts.values,
+                        names=status_counts.index,
+                        title="库存状态占比",
+                        color_discrete_sequence=["#2ecc71", "#e74c3c"]
+                    )
+                    st.plotly_chart(fig_pie, use_container_width=True)
+            
+            with col_ch2:
+                if "安全库存" in df_safety.columns:
+                    safety_data = df_safety[df_safety["安全库存"] > 0]["安全库存"]
+                    if len(safety_data) > 0:
+                        fig_hist = px.histogram(
+                            safety_data, nbins=30,
+                            title="安全库存值分布",
+                            labels={"value": "安全库存", "count": "物料数量"},
+                            color_discrete_sequence=["#3498db"]
+                        )
+                        st.plotly_chart(fig_hist, use_container_width=True)
+            
+            st.subheader("实际库存 vs 安全库存对比（前30个物料）")
+            compare_df = df_safety[["物料编码", "实际库存", "安全库存"]].dropna().head(30)
             if len(compare_df) > 0:
                 fig_compare = go.Figure()
                 fig_compare.add_trace(go.Bar(x=compare_df["物料编码"], y=compare_df["实际库存"], name="实际库存", marker_color="#2ecc71"))
                 fig_compare.add_trace(go.Bar(x=compare_df["物料编码"], y=compare_df["安全库存"], name="安全库存", marker_color="#e74c3c"))
-                fig_compare.update_layout(barmode="group", title="实际库存 vs 安全库存", xaxis_title="物料编码", yaxis_title="库存数量", height=500)
+                fig_compare.update_layout(barmode="group", title="实际库存 vs 安全库存", xaxis_title="物料编码", yaxis_title="库存数量")
                 st.plotly_chart(fig_compare, use_container_width=True)
         
-        # Tab 4
+        # Tab 4: 包材安全库存
         with tab4:
-            st.subheader("📈 库存洞察分析")
-            risk_levels = []
-            for _, row in df.iterrows():
-                if row["缺货风险"] == 0:
-                    risk_levels.append("无风险")
-                elif row["缺货风险"] < 30:
-                    risk_levels.append("低风险")
-                elif row["缺货风险"] < 60:
-                    risk_levels.append("中风险")
+            st.subheader("包材安全库存列表")
+            if df_packaging is not None and len(df_packaging) > 0:
+                if "建议安全库存" in df_packaging.columns:
+                    pack_cols = ["物料编码", "建议安全库存", "品类"] if "品类" in df_packaging.columns else ["物料编码", "建议安全库存"]
+                    available_pack = [c for c in pack_cols if c in df_packaging.columns]
+                    st.dataframe(df_packaging[available_pack], use_container_width=True, height=400)
+                    
+                    if "品类" in df_packaging.columns:
+                        pack_cat = df_packaging["品类"].value_counts().reset_index()
+                        pack_cat.columns = ["品类", "数量"]
+                        fig_pack = px.bar(pack_cat, x="品类", y="数量", title="包材品类分布")
+                        st.plotly_chart(fig_pack, use_container_width=True)
                 else:
-                    risk_levels.append("高风险")
-            df["风险等级"] = risk_levels
-            
-            col_ins1, col_ins2 = st.columns(2)
-            with col_ins1:
-                risk_counts = df["风险等级"].value_counts()
-                if len(risk_counts) > 0:
-                    fig_risk = px.bar(x=risk_counts.index, y=risk_counts.values, title="风险等级分布", labels={"x": "风险等级", "y": "物料数量"}, color=risk_counts.index, color_discrete_sequence=["#2ecc71", "#f39c12", "#e67e22", "#e74c3c"])
-                    fig_risk.update_layout(height=400)
-                    st.plotly_chart(fig_risk, use_container_width=True)
-            with col_ins2:
-                top10_stock = df.nlargest(10, "安全库存")[["物料编码", "安全库存"]]
-                fig_top = px.bar(top10_stock, x="物料编码", y="安全库存", title="安全库存 Top 10", color="安全库存", color_continuous_scale="blues", text="安全库存")
-                fig_top.update_traces(textposition="outside")
-                fig_top.update_layout(height=400)
-                st.plotly_chart(fig_top, use_container_width=True)
+                    st.info("包材数据格式已识别，但未找到'建议安全库存'列")
+            else:
+                st.info("包材数据未找到或格式不符")
         
         st.success("✅ 系统运行中 | 数据加载成功")
     else:
-        st.error("❌ 数据处理失败，请检查Excel文件格式")
+        st.error("数据处理失败，请检查Excel文件格式")
 else:
-    st.info("👈 请从左侧上传文件开始使用")
+    st.info("👈 请从左侧上传Excel文件开始使用")
