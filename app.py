@@ -48,26 +48,6 @@ st.markdown("""
         color: #6c757d;
         margin-bottom: 2rem;
     }
-    
-    /* 卡片标题 */
-    .card-title {
-        font-size: 0.9rem;
-        font-weight: 500;
-        color: #6c757d;
-        margin-bottom: 0.5rem;
-    }
-    
-    /* 预警高亮 */
-    .alert-text {
-        color: #dc3545;
-        font-weight: bold;
-    }
-    
-    /* 成功文本 */
-    .success-text {
-        color: #28a745;
-        font-weight: bold;
-    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -312,7 +292,7 @@ if uploaded_file is not None:
                     fig_compare.add_trace(go.Bar(x=compare_df["物料编码"], y=compare_df["实际库存"], name="实际库存", marker_color="#2ecc71"))
                     fig_compare.add_trace(go.Bar(x=compare_df["物料编码"], y=compare_df["安全库存"], name="安全库存", marker_color="#e74c3c"))
                     fig_compare.update_layout(
-                        barmode="group", 
+                        barmode="group",
                         title="实际库存 vs 安全库存（前30项）",
                         xaxis_title="物料编码",
                         yaxis_title="库存数量",
@@ -326,5 +306,4 @@ if uploaded_file is not None:
     else:
         st.error("数据处理失败，请检查文件格式")
 else:
-    # 空状态提示
     st.info("👈 请从左侧上传文件开始使用")
