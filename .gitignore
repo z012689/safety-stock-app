@@ -12,7 +12,7 @@ venv.bak/
 .venv/
 
 # Streamlit
-.streamlit/secrets.toml
+.streamlit/
 
 # IDE
 .vscode/
@@ -29,13 +29,9 @@ Thumbs.db
 # Output files
 *.csv
 *_output.xlsx
-*_计算结果.xlsx
 
 # Jupyter Notebook
 .ipynb_checkpoints/
 
 # pytest
 .pytest_cache/
-
-# mypy
-.mypy_cache/
