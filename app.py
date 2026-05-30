@@ -6,17 +6,153 @@ import plotly.express as px
 import plotly.graph_objects as go
 from io import BytesIO
 
+# 页面配置
 st.set_page_config(
-    page_title="Safety Stock Management",
-    page_icon="package",
+    page_title="安全库存管理系统",
+    page_icon="📦",
     layout="wide"
 )
 
+# 自定义CSS - 美观的现代风格
+st.markdown("""
+<style>
+    /* 主背景 */
+    .stApp {
+        background: linear-gradient(135deg, #F0F4F8 0%, #E2E8F0 100%);
+    }
+    
+    /* 主标题 */
+    .main-title {
+        font-size: 32px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #1E293B, #3B82F6);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 5px;
+    }
+    .sub-title {
+        font-size: 14px;
+        color: #64748B;
+        margin-bottom: 20px;
+    }
+    
+    /* 统计卡片 */
+    .stat-card {
+        background: white;
+        border-radius: 20px;
+        padding: 20px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        transition: all 0.3s;
+        border: 1px solid #E2E8F0;
+    }
+    .stat-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.1);
+    }
+    .stat-value {
+        font-size: 28px;
+        font-weight: 700;
+        color: #1E293B;
+    }
+    .stat-label {
+        font-size: 13px;
+        color: #64748B;
+        margin-top: 8px;
+    }
+    .stat-unit {
+        font-size: 11px;
+        color: #94A3B8;
+    }
+    
+    /* 预警卡片 */
+    .alert-card {
+        background: linear-gradient(135deg, #FEF2F2, #FEE2E2);
+        border-left: 4px solid #EF4444;
+        border-radius: 16px;
+        padding: 16px 20px;
+        margin: 20px 0;
+    }
+    .alert-title {
+        font-weight: 700;
+        color: #DC2626;
+        font-size: 16px;
+        margin-bottom: 8px;
+    }
+    
+    /* 上传区域 */
+    .upload-box {
+        background: white;
+        border: 2px dashed #CBD5E1;
+        border-radius: 24px;
+        padding: 40px;
+        text-align: center;
+        margin: 20px 0;
+    }
+    
+    /* 顶部信息栏 */
+    .top-bar {
+        background: white;
+        border-radius: 16px;
+        padding: 12px 20px;
+        margin-bottom: 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .current-date {
+        color: #64748B;
+        font-size: 14px;
+    }
+    .current-month {
+        background: #3B82F6;
+        color: white;
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: 500;
+    }
+    
+    /* 按钮区域 */
+    .button-group {
+        display: flex;
+        gap: 12px;
+        margin: 20px 0;
+    }
+    .stButton > button {
+        border-radius: 12px;
+        padding: 10px 24px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+    .stButton > button:hover {
+        transform: scale(1.02);
+    }
+    
+    /* 侧边栏美化 */
+    [data-testid="stSidebar"] {
+        background: white;
+        border-right: 1px solid #E2E8F0;
+    }
+    [data-testid="stSidebar"] .stMarkdown {
+        color: #1E293B;
+    }
+    
+    /* 分隔线 */
+    hr {
+        margin: 20px 0;
+        border-color: #E2E8F0;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 
 class SafetyStockCalculator:
+    """安全库存计算器"""
     
     @staticmethod
     def get_lead_time_coef(days):
+        """采购周期系数"""
         if pd.isna(days):
             return 1
         days = float(days)
@@ -39,6 +175,7 @@ class SafetyStockCalculator:
     
     @staticmethod
     def get_quality_score(df_quality, material_code):
+        """质量风险系数"""
         if df_quality is None or df_quality.empty:
             return 1.0
         try:
@@ -55,6 +192,7 @@ class SafetyStockCalculator:
     
     @staticmethod
     def get_category_risk(df_category, material_code):
+        """品类策略系数"""
         if df_category is None or df_category.empty:
             return 1.0
         try:
@@ -71,6 +209,7 @@ class SafetyStockCalculator:
     
     @staticmethod
     def calc_safety_stock(future_avg, past_avg, quality, category, lead_coef):
+        """安全库存计算公式"""
         if pd.isna(future_avg) or pd.isna(past_avg):
             return 0
         if future_avg <= 0 and past_avg <= 0:
@@ -80,8 +219,10 @@ class SafetyStockCalculator:
         return base * combined * lead_coef
     
     def process(self, df_mat, df_qual, df_cat):
+        """主处理函数"""
         df = df_mat.copy()
         
+        # 查找月份列
         future_cols = []
         past_cols = []
         for col in df.columns:
@@ -91,25 +232,28 @@ class SafetyStockCalculator:
             elif 'M01' in col_str or 'M02' in col_str or 'M03' in col_str or 'M04' in col_str or 'M05' in col_str or 'M06' in col_str:
                 past_cols.append(col)
         
+        # 计算月均用量
         if future_cols:
-            df['future_avg'] = df[future_cols].apply(pd.to_numeric, errors='coerce').mean(axis=1)
+            df['未来3个月月均用量'] = df[future_cols].apply(pd.to_numeric, errors='coerce').mean(axis=1)
         elif '未来3个月月均用量' in df.columns:
-            df['future_avg'] = pd.to_numeric(df['未来3个月月均用量'], errors='coerce')
+            df['未来3个月月均用量'] = pd.to_numeric(df['未来3个月月均用量'], errors='coerce')
         else:
-            df['future_avg'] = 0
+            df['未来3个月月均用量'] = 0
         
         if past_cols:
-            df['past_avg'] = df[past_cols].apply(pd.to_numeric, errors='coerce').mean(axis=1)
+            df['过去6个月月均用量'] = df[past_cols].apply(pd.to_numeric, errors='coerce').mean(axis=1)
         elif '月均量(半年)' in df.columns:
-            df['past_avg'] = pd.to_numeric(df['月均量(半年)'], errors='coerce')
+            df['过去6个月月均用量'] = pd.to_numeric(df['月均量(半年)'], errors='coerce')
         else:
-            df['past_avg'] = 0
+            df['过去6个月月均用量'] = 0
         
+        # 采购周期系数
         if '平均交货周期(天)' in df.columns:
-            df['lead_coef'] = df['平均交货周期(天)'].apply(self.get_lead_time_coef)
+            df['采购周期系数'] = df['平均交货周期(天)'].apply(self.get_lead_time_coef)
         else:
-            df['lead_coef'] = 1
+            df['采购周期系数'] = 1
         
+        # 系数计算
         quality_list = []
         category_list = []
         code_col = df.columns[0]
@@ -118,232 +262,111 @@ class SafetyStockCalculator:
             quality_list.append(self.get_quality_score(df_qual, code))
             category_list.append(self.get_category_risk(df_cat, code))
         
-        df['quality_risk'] = quality_list
-        df['category_risk'] = category_list
+        df['质量风险系数'] = quality_list
+        df['品类策略系数'] = category_list
         
-        df['safety_stock'] = df.apply(
+        # 安全库存
+        df['安全库存'] = df.apply(
             lambda x: self.calc_safety_stock(
-                x.get('future_avg', 0),
-                x.get('past_avg', 0),
-                x.get('quality_risk', 1),
-                x.get('category_risk', 1),
-                x.get('lead_coef', 1)
+                x.get('未来3个月月均用量', 0),
+                x.get('过去6个月月均用量', 0),
+                x.get('质量风险系数', 1),
+                x.get('品类策略系数', 1),
+                x.get('采购周期系数', 1)
             ), axis=1
         )
         
+        # 寄售物料
         if '是否寄售' in df.columns:
-            df.loc[df['是否寄售'] == '寄售', 'safety_stock'] = 0
+            df.loc[df['是否寄售'] == '寄售', '安全库存'] = 0
         
+        # 实际库存
         actual_col = None
         for col in df.columns:
             if '实际库存' in col or '6月末' in col:
                 actual_col = col
                 break
         if actual_col:
-            df['actual_stock'] = pd.to_numeric(df[actual_col], errors='coerce').fillna(0)
+            df['实际库存'] = pd.to_numeric(df[actual_col], errors='coerce').fillna(0)
         else:
-            df['actual_stock'] = 0
+            df['实际库存'] = 0
         
-        df['coverage'] = df.apply(
-            lambda x: x['actual_stock'] / x['safety_stock'] if x['safety_stock'] > 0 else 999,
+        # 库存覆盖倍数
+        df['库存覆盖倍数'] = df.apply(
+            lambda x: x['实际库存'] / x['安全库存'] if x['安全库存'] > 0 else 999,
             axis=1
         )
-        df['coverage'] = df['coverage'].replace([np.inf, -np.inf], 999)
+        df['库存覆盖倍数'] = df['库存覆盖倍数'].replace([np.inf, -np.inf], 999)
         
+        # 预警等级
         def get_warning(cov):
             if cov >= 3:
-                return "Sufficient"
+                return "✅ 充足"
             elif cov >= 1.5:
-                return "Normal"
+                return "🟢 正常"
             elif cov >= 0.5:
-                return "Low"
+                return "🟡 偏低"
             else:
-                return "Critical"
+                return "🔴 严重不足"
         
-        df['warning'] = df['coverage'].apply(get_warning)
+        df['预警等级'] = df['库存覆盖倍数'].apply(get_warning)
         
         return df
 
 
 def main():
-    st.title("Safety Stock Management System")
-    st.caption("Auto Calculate | Smart Alert | Monthly Update")
-    st.divider()
+    # 获取当前时间
+    now = datetime.now()
+    current_date = now.strftime("%Y年%m月%d日 %A")
+    current_month = now.strftime("%Y年%m月")
     
+    # 顶部信息栏
+    col_title, col_date = st.columns([3, 1])
+    with col_title:
+        st.markdown('<div class="main-title">📦 安全库存管理系统</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sub-title">自动计算 · 智能预警 · 月度更新</div>', unsafe_allow_html=True)
+    with col_date:
+        st.markdown(f"""
+        <div class="top-bar">
+            <span class="current-date">📅 {current_date}</span>
+            <span class="current-month">{current_month}</span>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # 初始化session
     if 'result' not in st.session_state:
         st.session_state.result = None
+    if 'uploaded' not in st.session_state:
+        st.session_state.uploaded = False
     
+    # ==================== 侧边栏 ====================
     with st.sidebar:
-        st.header("Settings")
+        st.markdown("### ⚙️ 系统配置")
+        st.markdown("---")
         
+        # 文件上传
         uploaded_file = st.file_uploader(
-            "Upload Excel File",
-            type=['xlsx', 'xls']
-        )
-        
-        st.divider()
-        
-        st.subheader("Monthly Update")
-        new_month_name = st.text_input("New Month Name", value=f"{datetime.now().year}-{datetime.now().month}")
-        update_file = st.file_uploader(
-            "Upload New Month Data",
+            "📁 上传Excel文件",
             type=['xlsx', 'xls'],
-            key="monthly"
+            help="支持 .xlsx, .xls 格式"
         )
         
-        st.divider()
+        st.markdown("---")
         
-        calc_btn = st.button("Calculate", type="primary", use_container_width=True)
-        update_btn = st.button("Update", use_container_width=True)
+        # 月度更新区域
+        st.markdown("### 📅 月度数据更新")
+        new_month_name = st.text_input("新月份名称", value=f"{now.year}年{now.month}月")
         
-        st.divider()
+        update_file = st.file_uploader(
+            "上传新月份数据文件",
+            type=['xlsx', 'xls'],
+            key="monthly",
+            help="文件需包含「物料编码」和「用量」两列"
+        )
         
-        with st.expander("Formula"):
+        st.markdown("---")
+        
+        # 公式说明
+        with st.expander("📖 计算公式说明"):
             st.markdown("""
-            Safety Stock = (Future 3M Avg + Past 6M Avg) / 2 
-            x (Quality x 0.4 + Category x 0.6) 
-            x Lead Time Coef
-            
-            Quality = 1 + Lowx0.1 + Midx0.2 + Highx0.3
-            
-            Lead Time Coef:
-            1-7d: 0.2 | 8-15d: 0.3 | 16-21d: 0.6 | 22-30d: 1.0
-            31-40d: 1.2 | 41-45d: 1.5 | 45-60d: 2.0 | >60d: 3.0
-            """)
-    
-    if uploaded_file is not None:
-        try:
-            with st.spinner("Loading..."):
-                excel_file = pd.ExcelFile(uploaded_file)
-                sheets = {}
-                for sheet_name in excel_file.sheet_names:
-                    sheets[sheet_name] = pd.read_excel(uploaded_file, sheet_name=sheet_name)
-            
-            df_mat = sheets.get('安全库存（202509月）')
-            df_qual = sheets.get('原辅料质量等级风险')
-            df_cat = sheets.get('品类策略系数')
-            
-            if df_mat is None:
-                st.error("Sheet '安全库存（202509月）' not found")
-                st.stop()
-            
-            calculator = SafetyStockCalculator()
-            
-            if calc_btn:
-                with st.spinner("Calculating..."):
-                    df_result = calculator.process(df_mat, df_qual, df_cat)
-                    st.session_state.result = df_result
-                
-                st.success("Calculation completed!")
-                st.balloons()
-                
-                total = len(df_result)
-                low = len(df_result[df_result['coverage'] < 1.5])
-                low_pct = round(low / total * 100, 1)
-                avg_ss = df_result['safety_stock'].mean()
-                total_actual = df_result['actual_stock'].sum()
-                avg_cov = df_result['coverage'].mean()
-                
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Total Materials", f"{total:,}")
-                with col2:
-                    st.metric("Low Stock Alert", f"{low:,}", f"{low_pct}%")
-                with col3:
-                    st.metric("Avg Safety Stock", f"{avg_ss:,.0f}")
-                with col4:
-                    st.metric("Avg Coverage", f"{avg_cov:.1f}x")
-                
-                st.divider()
-                
-                high_risk = df_result[df_result['coverage'] < 1].nlargest(10, 'safety_stock')
-                if not high_risk.empty:
-                    st.warning("Critical: Materials with insufficient stock")
-                    cols_to_show = [df_result.columns[0], 'actual_stock', 'safety_stock', 'coverage', 'warning']
-                    cols_to_show = [c for c in cols_to_show if c in high_risk.columns]
-                    st.dataframe(high_risk[cols_to_show], use_container_width=True, height=200)
-                    st.divider()
-                
-                tab1, tab2, tab3 = st.tabs(["Data Table", "Charts", "Export"])
-                
-                with tab1:
-                    display_cols = [df_result.columns[0], 'future_avg', 'past_avg', 
-                                   'quality_risk', 'category_risk', 'lead_coef', 
-                                   'safety_stock', 'actual_stock', 'coverage', 'warning']
-                    display_cols = [c for c in display_cols if c in df_result.columns]
-                    st.dataframe(df_result[display_cols].head(100), use_container_width=True, height=500)
-                
-                with tab2:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        warning_counts = df_result['warning'].value_counts().reset_index()
-                        warning_counts.columns = ['Status', 'Count']
-                        fig_pie = px.pie(warning_counts, values='Count', names='Status', title='Stock Status')
-                        fig_pie.update_layout(height=400)
-                        st.plotly_chart(fig_pie, use_container_width=True)
-                    with col2:
-                        top_ss = df_result.nlargest(15, 'safety_stock')[[df_result.columns[0], 'safety_stock']]
-                        fig_bar = px.bar(top_ss, x=df_result.columns[0], y='safety_stock', title='Top 15 Safety Stock')
-                        fig_bar.update_layout(height=400, xaxis_tickangle=-45)
-                        st.plotly_chart(fig_bar, use_container_width=True)
-                
-                with tab3:
-                    output = BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df_result.to_excel(writer, sheet_name='Safety_Stock', index=False)
-                        summary = pd.DataFrame({
-                            'Metric': ['Total Materials', 'Total Safety Stock', 'Avg Safety Stock', 
-                                      'Total Actual Stock', 'Low Stock Count', 'Low Stock Pct', 'Avg Coverage'],
-                            'Value': [
-                                len(df_result), f"{df_result['safety_stock'].sum():,.0f}",
-                                f"{df_result['safety_stock'].mean():,.0f}", f"{df_result['actual_stock'].sum():,.0f}",
-                                len(df_result[df_result['coverage'] < 1.5]),
-                                f"{len(df_result[df_result['coverage'] < 1.5]) / len(df_result) * 100:.1f}%",
-                                f"{df_result['coverage'].mean():.1f}x"
-                            ]
-                        })
-                        summary.to_excel(writer, sheet_name='Summary', index=False)
-                    output.seek(0)
-                    st.download_button("Download Excel", data=output, file_name=f"safety_stock_{datetime.now().strftime('%Y%m%d')}.xlsx")
-            
-            elif st.session_state.result is not None:
-                df_result = st.session_state.result
-                total = len(df_result)
-                low = len(df_result[df_result['coverage'] < 1.5])
-                avg_ss = df_result['safety_stock'].mean()
-                avg_cov = df_result['coverage'].mean()
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Total Materials", f"{total:,}")
-                with col2:
-                    st.metric("Low Stock Alert", f"{low:,}")
-                with col3:
-                    st.metric("Avg Safety Stock", f"{avg_ss:,.0f}")
-                with col4:
-                    st.metric("Avg Coverage", f"{avg_cov:.1f}x")
-                st.info("Click 'Calculate' to refresh")
-            else:
-                st.info("Click 'Calculate' to start")
-                
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-    else:
-        st.info("Please upload an Excel file to begin")
-        
-        with st.expander("Instructions"):
-            st.markdown("""
-            ### How to Use
-            1. Upload Excel file in the sidebar
-            2. Click 'Calculate'
-            3. View results and export
-            
-            ### Required Sheet
-            - `安全库存（202509月）`: Material usage data
-            """)
-    
-    st.divider()
-    st.caption("Safety Stock Management System | Version 2.0")
-
-
-if __name__ == "__main__":
-    main()
+            **安全库存公式：**
