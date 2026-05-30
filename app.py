@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 from io import BytesIO
 
 st.set_page_config(
-    page_title="Safety Stock Management",
+    page_title="安全库存管理系统",
     page_icon="package",
     layout="wide"
 )
@@ -152,13 +152,13 @@ class SafetyStockCalculator:
         
         def get_warning(cov):
             if cov >= 3:
-                return "Sufficient"
+                return "充足"
             elif cov >= 1.5:
-                return "Normal"
+                return "正常"
             elif cov >= 0.5:
-                return "Low"
+                return "偏低"
             else:
-                return "Critical"
+                return "严重不足"
         
         df['warning'] = df['coverage'].apply(get_warning)
         
@@ -167,62 +167,69 @@ class SafetyStockCalculator:
 
 def main():
     now = datetime.now()
+    current_date = now.strftime("%Y年%m月%d日")
     
-    st.title("Safety Stock Management System")
-    st.caption("Auto Calculate | Smart Alert | Monthly Update")
-    st.markdown(f"Date: {now.strftime('%Y-%m-%d')}")
+    st.title("安全库存管理系统")
+    st.caption("自动计算 | 智能预警 | 月度更新")
+    st.markdown(f"**当前日期：{current_date}**")
     st.divider()
     
     if 'result' not in st.session_state:
         st.session_state.result = None
-    if 'active_tab' not in st.session_state:
-        st.session_state.active_tab = None
     
+    # 侧边栏
     with st.sidebar:
-        st.header("Settings")
+        st.header("系统配置")
         
         uploaded_file = st.file_uploader(
-            "Upload Excel File",
+            "上传Excel文件",
             type=['xlsx', 'xls']
         )
         
         st.divider()
         
-        st.subheader("Monthly Update")
-        new_month_name = st.text_input("New Month Name", value=f"{now.year}-{now.month}")
+        st.subheader("月度数据更新")
+        new_month_name = st.text_input("新月份名称", value=f"{now.year}年{now.month}月")
         update_file = st.file_uploader(
-            "Upload New Month Data",
+            "上传新月份数据文件",
             type=['xlsx', 'xls'],
             key="monthly"
         )
         
         st.divider()
         
-        with st.expander("Formula"):
+        with st.expander("计算公式说明"):
             st.markdown("""
-            Safety Stock = (Future 3M Avg + Past 6M Avg) / 2 
-            x (Quality x 0.4 + Category x 0.6) 
-            x Lead Time Coef
+            安全库存 = (未来3个月月均 + 过去6个月月均) / 2 
+            x (质量风险 x 0.4 + 品类策略 x 0.6) 
+            x 采购周期系数
             
-            Quality = 1 + Lowx0.1 + Midx0.2 + Highx0.3
+            质量风险 = 1 + 低风险x0.1 + 中风险x0.2 + 高风险x0.3
             
-            Lead Time Coef:
-            1-7d: 0.2 | 8-15d: 0.3 | 16-21d: 0.6
-            22-30d: 1.0 | 31-40d: 1.2 | 41-45d: 1.5
-            45-60d: 2.0 | >60d: 3.0
+            采购周期系数:
+            1-7天: 0.2
+            8-15天: 0.3
+            16-21天: 0.6
+            22-30天: 1.0
+            31-40天: 1.2
+            41-45天: 1.5
+            45-60天: 2.0
+            60天以上: 3.0
             """)
     
+    # 按钮区域
     col1, col2 = st.columns(2)
     with col1:
-        calc_btn = st.button("Calculate Safety Stock", type="primary", use_container_width=True)
+        calc_btn = st.button("开始计算安全库存", type="primary", use_container_width=True)
     with col2:
-        update_btn = st.button("Monthly Update", use_container_width=True)
+        update_btn = st.button("执行月度更新", use_container_width=True)
     
     st.divider()
     
+    # 处理上传文件
     if uploaded_file is not None:
         try:
-            with st.spinner("Loading data..."):
+            with st.spinner("正在加载数据..."):
                 excel_file = pd.ExcelFile(uploaded_file)
                 sheets = {}
                 for sheet_name in excel_file.sheet_names:
@@ -233,19 +240,20 @@ def main():
             df_cat = sheets.get('品类策略系数')
             
             if df_mat is None:
-                st.error("Sheet not found: 安全库存（202509月）")
+                st.error("未找到工作表：安全库存（202509月）")
                 st.stop()
             
             calculator = SafetyStockCalculator()
             
             if calc_btn:
-                with st.spinner("Calculating..."):
+                with st.spinner("正在计算安全库存..."):
                     df_result = calculator.process(df_mat, df_qual, df_cat)
                     st.session_state.result = df_result
                 
-                st.success("Calculation completed!")
+                st.success("安全库存计算完成！")
                 st.balloons()
                 
+                # KPI指标
                 total = len(df_result)
                 low = len(df_result[df_result['coverage'] < 1.5])
                 low_pct = round(low / total * 100, 1)
@@ -253,155 +261,112 @@ def main():
                 total_actual = df_result['actual_stock'].sum()
                 avg_cov = df_result['coverage'].mean()
                 
-                col1, col2, col3, col4, col5 = st.columns(5)
-                metrics = [
-                    ("Total Materials", f"{total:,}"),
-                    ("Low Stock Alert", f"{low:,}", f"{low_pct}%"),
-                    ("Avg Safety Stock", f"{avg_ss:,.0f}"),
-                    ("Total Actual Stock", f"{total_actual:,.0f}"),
-                    ("Avg Coverage", f"{avg_cov:.1f}x")
-                ]
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("物料总览", f"{total:,}", "个物料")
+                with col2:
+                    st.metric("低库存预警物料", f"{low:,}", f"占总数 {low_pct}%")
+                with col3:
+                    st.metric("平均安全库存", f"{avg_ss:,.0f}", "件/物料")
+                with col4:
+                    st.metric("平均库存覆盖", f"{avg_cov:.1f}倍", "充足" if avg_cov >= 1.5 else "偏低")
                 
-                for col, metric in zip([col1, col2, col3, col4, col5], metrics):
-                    with col:
-                        st.metric(metric[0], metric[1], metric[2] if len(metric) > 2 else None)
-                
-                st.divider()
-                
-                # Four function buttons
-                col_a, col_b, col_c, col_d = st.columns(4)
-                with col_a:
-                    show_alert = st.button("Warning", use_container_width=True)
-                with col_b:
-                    show_data = st.button("Data Table", use_container_width=True)
-                with col_c:
-                    show_chart = st.button("Charts", use_container_width=True)
-                with col_d:
-                    show_export = st.button("Export", use_container_width=True)
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("总实际库存", f"{total_actual:,.0f}", "所有物料合计")
+                with col2:
+                    total_ss = df_result['safety_stock'].sum()
+                    st.metric("建议库存总量", f"{total_ss:,.0f}", "基于公式计算")
+                with col3:
+                    st.metric("包材库存", f"{avg_cov:.1f}倍", "库存充足" if avg_cov >= 1.5 else "库存偏低")
                 
                 st.divider()
                 
+                # 高风险预警
                 high_risk = df_result[df_result['coverage'] < 1].nlargest(10, 'safety_stock')
-                
-                if show_alert or st.session_state.active_tab == 'alert':
-                    st.session_state.active_tab = 'alert'
-                    st.subheader("High Risk Materials")
-                    st.caption("These materials have insufficient stock, recommend immediate purchase")
-                    
-                    if not high_risk.empty:
-                        alert_df = high_risk[['物料编码', 'actual_stock', 'safety_stock', 'coverage', 'warning']].copy()
-                        alert_df.columns = ['Material Code', 'Actual Stock', 'Safety Stock', 'Coverage', 'Status']
-                        st.dataframe(
-                            alert_df.style.format({
-                                'Actual Stock': '{:,.0f}',
-                                'Safety Stock': '{:,.0f}',
-                                'Coverage': '{:.1f}'
-                            }),
-                            use_container_width=True,
-                            height=300
-                        )
-                    else:
-                        st.success("No high risk materials found!")
-                
-                if show_data or st.session_state.active_tab == 'data':
-                    st.session_state.active_tab = 'data'
-                    st.subheader("Data Details")
-                    st.caption(f"Total {len(df_result)} records")
-                    
-                    detail_df = df_result[[
-                        '物料编码', 'future_avg', 'past_avg',
-                        'quality_risk', 'category_risk', 'lead_coef',
-                        'safety_stock', 'actual_stock', 'coverage', 'warning'
-                    ]].copy()
-                    
-                    detail_df.columns = [
-                        'Material Code', 'Future 3M Avg', 'Past 6M Avg',
-                        'Quality Risk', 'Category Risk', 'Lead Time Coef',
-                        'Safety Stock', 'Actual Stock', 'Coverage', 'Status'
-                    ]
-                    
+                if not high_risk.empty:
+                    st.warning("高风险物料预警：以下物料库存严重不足，建议立即采购")
+                    cols_to_show = [df_result.columns[0], 'actual_stock', 'safety_stock', 'coverage', 'warning']
+                    cols_to_show = [c for c in cols_to_show if c in high_risk.columns]
                     st.dataframe(
-                        detail_df.head(100).style.format({
-                            'Future 3M Avg': '{:,.0f}',
-                            'Past 6M Avg': '{:,.0f}',
-                            'Safety Stock': '{:,.0f}',
-                            'Actual Stock': '{:,.0f}',
-                            'Coverage': '{:.1f}'
+                        high_risk[cols_to_show].style.format({
+                            'actual_stock': '{:,.0f}',
+                            'safety_stock': '{:,.0f}',
+                            'coverage': '{:.1f}'
                         }),
                         use_container_width=True,
-                        height=500
+                        height=250
                     )
+                    st.divider()
                 
-                if show_chart or st.session_state.active_tab == 'chart':
-                    st.session_state.active_tab = 'chart'
-                    st.subheader("Charts")
-                    
-                    chart1, chart2 = st.columns(2)
-                    
-                    with chart1:
+                # Tab页面
+                tab1, tab2, tab3 = st.tabs(["数据详情", "可视化分析", "数据导出"])
+                
+                with tab1:
+                    st.caption(f"共 {len(df_result)} 条记录")
+                    display_cols = [df_result.columns[0], 'future_avg', 'past_avg',
+                                   'quality_risk', 'category_risk', 'lead_coef',
+                                   'safety_stock', 'actual_stock', 'coverage', 'warning']
+                    display_cols = [c for c in display_cols if c in df_result.columns]
+                    st.dataframe(df_result[display_cols].head(100), use_container_width=True, height=500)
+                
+                with tab2:
+                    col1, col2 = st.columns(2)
+                    with col1:
                         warning_counts = df_result['warning'].value_counts().reset_index()
-                        warning_counts.columns = ['Status', 'Count']
-                        fig_pie = px.pie(
-                            warning_counts, values='Count', names='Status',
-                            title='Stock Status Distribution'
-                        )
+                        warning_counts.columns = ['状态', '数量']
+                        fig_pie = px.pie(warning_counts, values='数量', names='状态', title='库存状态分布')
                         fig_pie.update_layout(height=400)
                         st.plotly_chart(fig_pie, use_container_width=True)
-                    
-                    with chart2:
-                        top_ss = df_result.nlargest(15, 'safety_stock')[['物料编码', 'safety_stock']]
-                        fig_bar = px.bar(
-                            top_ss, x='物料编码', y='safety_stock',
-                            title='Top 15 Safety Stock'
-                        )
+                    with col2:
+                        top_ss = df_result.nlargest(15, 'safety_stock')[[df_result.columns[0], 'safety_stock']]
+                        fig_bar = px.bar(top_ss, x=df_result.columns[0], y='safety_stock', title='安全库存 TOP 15')
                         fig_bar.update_layout(height=400, xaxis_tickangle=-45)
                         st.plotly_chart(fig_bar, use_container_width=True)
                     
                     fig_hist = px.histogram(
                         df_result[df_result['coverage'] < 10],
                         x='coverage', nbins=30,
-                        title='Coverage Distribution'
+                        title='库存覆盖倍数分布'
                     )
                     fig_hist.update_layout(height=400)
                     st.plotly_chart(fig_hist, use_container_width=True)
                 
-                if show_export or st.session_state.active_tab == 'export':
-                    st.session_state.active_tab = 'export'
-                    st.subheader("Export Data")
+                with tab3:
+                    st.subheader("导出数据")
                     
                     output = BytesIO()
                     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        df_result.to_excel(writer, sheet_name='Safety_Stock_Result', index=False)
+                        df_result.to_excel(writer, sheet_name='安全库存计算结果', index=False)
                         
                         summary = pd.DataFrame({
-                            'Metric': ['Total Materials', 'Total Safety Stock', 'Avg Safety Stock',
-                                      'Total Actual Stock', 'Low Stock Count', 'Low Stock Pct', 
-                                      'Avg Coverage', 'Calculation Time'],
-                            'Value': [
+                            '指标': ['总物料数', '总安全库存', '平均安全库存', '总实际库存',
+                                   '低库存物料数', '低库存占比', '平均库存覆盖', '计算时间'],
+                            '数值': [
                                 len(df_result),
                                 f"{df_result['safety_stock'].sum():,.0f}",
                                 f"{df_result['safety_stock'].mean():,.0f}",
                                 f"{df_result['actual_stock'].sum():,.0f}",
                                 len(df_result[df_result['coverage'] < 1.5]),
                                 f"{len(df_result[df_result['coverage'] < 1.5]) / len(df_result) * 100:.1f}%",
-                                f"{df_result['coverage'].mean():.1f}x",
+                                f"{df_result['coverage'].mean():.1f}倍",
                                 datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                             ]
                         })
-                        summary.to_excel(writer, sheet_name='Summary', index=False)
+                        summary.to_excel(writer, sheet_name='汇总统计', index=False)
                         
                         if not high_risk.empty:
-                            high_risk.to_excel(writer, sheet_name='High_Risk_Materials', index=False)
+                            high_risk.to_excel(writer, sheet_name='高风险物料', index=False)
                     
                     output.seek(0)
                     st.download_button(
-                        label="Download Excel Report",
+                        label="下载Excel报告",
                         data=output,
-                        file_name=f"safety_stock_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        file_name=f"安全库存报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
                     
-                    st.info("Report includes: Safety Stock Result, Summary, High Risk Materials")
+                    st.info("报告包含：安全库存计算结果、汇总统计、高风险物料")
             
             elif st.session_state.result is not None:
                 df_result = st.session_state.result
@@ -412,36 +377,36 @@ def main():
                 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Total Materials", f"{total:,}")
+                    st.metric("物料总览", f"{total:,}")
                 with col2:
-                    st.metric("Low Stock Alert", f"{low:,}")
+                    st.metric("低库存预警", f"{low:,}")
                 with col3:
-                    st.metric("Avg Safety Stock", f"{avg_ss:,.0f}")
+                    st.metric("平均安全库存", f"{avg_ss:,.0f}")
                 with col4:
-                    st.metric("Avg Coverage", f"{avg_cov:.1f}x")
+                    st.metric("平均库存覆盖", f"{avg_cov:.1f}倍")
                 
-                st.info("Click 'Calculate Safety Stock' to refresh")
+                st.info("如需重新计算，请点击上方「开始计算安全库存」按钮")
             else:
-                st.info("Click 'Calculate Safety Stock' to start")
+                st.info("请点击上方「开始计算安全库存」按钮开始计算")
                 
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(f"处理文件时出错: {str(e)}")
     else:
-        st.info("Please upload an Excel file to begin")
+        st.info("请在左侧上传Excel文件")
         
-        with st.expander("Instructions"):
+        with st.expander("使用说明"):
             st.markdown("""
-            ### How to Use
-            1. Upload Excel file in the sidebar
-            2. Click 'Calculate Safety Stock'
-            3. Use buttons to view details
+            ### 使用方法
+            1. 在左侧上传Excel文件
+            2. 点击「开始计算安全库存」按钮
+            3. 查看结果并导出报告
             
-            ### Required Sheet
-            - `安全库存（202509月）`: Material usage data
+            ### 必需工作表
+            - `安全库存（202509月）`: 物料用量数据
             """)
     
     st.divider()
-    st.caption("Safety Stock Management System | Version 3.0")
+    st.caption("安全库存管理系统 | 版本 3.0 | 支持月度数据更新")
 
 
 if __name__ == "__main__":
