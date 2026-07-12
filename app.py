@@ -5,6 +5,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import io
+import re
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
@@ -27,6 +28,24 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def extract_number_from_text(text):
+    """从文本中提取数字"""
+    if pd.isna(text):
+        return 300
+    try:
+        # 如果是数字，直接返回
+        if isinstance(text, (int, float)):
+            return float(text)
+        # 如果是字符串，提取数字
+        text = str(text)
+        # 查找所有数字（包括小数）
+        numbers = re.findall(r'(\d+\.?\d*)', text)
+        if numbers:
+            return float(numbers[0])
+        return 300
+    except:
+        return 300
+
 # ============================================================================
 # 数据加载函数
 # ============================================================================
@@ -44,40 +63,55 @@ def load_safety_stock(file):
         col_list = df.columns.tolist()
         st.info(f"📄 安全库存列名: {col_list}")
         
-        # 查找物料编码列 - 可能是第一列
-        if '原料安全库存' in df.columns:
-            # 使用"原料安全库存"作为物料编码
-            df.rename(columns={'原料安全库存': '物料编码'}, inplace=True)
-            df['物料编码'] = df['物料编码'].astype(str)
-        else:
-            # 使用第一列作为物料编码
-            first_col = df.columns[0]
-            df.rename(columns={first_col: '物料编码'}, inplace=True)
-            df['物料编码'] = df['物料编码'].astype(str)
-            st.warning(f"⚠️ 使用第一列 '{first_col}' 作为物料编码")
+        # ============================================================
+        # 处理物料编码
+        # ============================================================
+        # 查找物料编码列
+        material_col = None
+        for col in col_list:
+            col_clean = str(col).replace(' ', '').replace('（', '(').replace('）', ')')
+            if '物料' in col_clean or '编码' in col_clean or 'SAP' in col_clean:
+                material_col = col
+                break
         
-        # 查找用量列 - 可能是第二列（那个长公式列）
+        if material_col is None:
+            material_col = col_list[0]
+            st.warning(f"⚠️ 未找到物料编码列，使用第一列: {material_col}")
+        
+        df.rename(columns={material_col: '物料编码'}, inplace=True)
+        df['物料编码'] = df['物料编码'].astype(str)
+        
+        # ============================================================
+        # 处理用量数据 - 提取数字
+        # ============================================================
+        # 查找用量列
         usage_col = None
         for col in df.columns:
-            if '月均' in str(col) or '用量' in str(col) or '公式' in str(col):
+            if col != '物料编码' and ('月均' in str(col) or '用量' in str(col) or '公式' in str(col) or '计算' in str(col)):
                 usage_col = col
                 break
         
-        if usage_col is None and len(df.columns) > 1:
-            usage_col = df.columns[1]
+        if usage_col is None:
+            # 使用第二列
+            for col in df.columns:
+                if col != '物料编码':
+                    usage_col = col
+                    break
         
         if usage_col:
-            df.rename(columns={usage_col: '未来3个月月均用量'}, inplace=True)
-            # 如果是文本，尝试提取数字
-            if df['未来3个月月均用量'].dtype == 'object':
-                df['未来3个月月均用量'] = df['未来3个月月均用量'].astype(str).str.extract(r'(\d+\.?\d*)').astype(float)
-            df['未来3个月月均用量'] = df['未来3个月月均用量'].fillna(300)
-            st.info(f"📊 使用列 '{usage_col}' 作为用量")
+            st.info(f"📊 使用列 '{usage_col}' 作为用量数据")
+            # 提取数字
+            df['未来3个月月均用量'] = df[usage_col].apply(extract_number_from_text)
+            # 删除原始列（可选）
+            # df.drop(columns=[usage_col], inplace=True)
         else:
             st.warning("⚠️ 未找到用量列，使用默认值300")
             df['未来3个月月均用量'] = 300
         
-        # 计算过去6个月月均用量（假设为用量的80-90%）
+        # ============================================================
+        # 计算其他字段
+        # ============================================================
+        # 过去6个月月均用量（假设为用量的85%）
         df['过去6个月月均用量'] = df['未来3个月月均用量'] * 0.85
         
         # 默认值
@@ -87,19 +121,24 @@ def load_safety_stock(file):
         df['品类策略系数'] = 1.0
         
         # 计算安全库存
-        df['安全库存量'] = (df['未来3个月月均用量'] * df['采购周期系数']).round(2)
+        df['安全库存量'] = (df['未来3个月月均用量'] * df['采购周期系数'] * df['质量风险系数'] * df['品类策略系数']).round(2)
         
         # 添加默认列
         df['物料描述'] = df['物料编码']
         df['工厂'] = '默认工厂'
         df['存储地点'] = '默认仓库'
         df['单位'] = 'KG'
+        df['实际库存'] = df['安全库存量'] * 0.8
+        df['预测库存'] = df['安全库存量'] * 0.9
         
         st.success(f"✅ 成功加载 {len(df)} 条物料数据")
+        st.info(f"📊 用量范围: {df['未来3个月月均用量'].min():.2f} ~ {df['未来3个月月均用量'].max():.2f}")
         return df
         
     except Exception as e:
         st.error(f"❌ 加载安全库存文件失败: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return None
 
 @st.cache_data
@@ -138,7 +177,6 @@ def load_usage(file):
         df = pd.read_excel(file)
         st.info(f"📄 使用量列名: {df.columns.tolist()}")
         
-        # 检查必要的列
         if '过账日期' not in df.columns or '以录入单位表示的数量' not in df.columns:
             st.warning("⚠️ 未找到'过账日期'或'以录入单位表示的数量'列")
             return None
@@ -383,9 +421,16 @@ def main():
         df_display = st.session_state.safety_data.copy()
         df_display['物料编码'] = df_display['物料编码'].astype(str)
         
+        # 确保数值列是数字类型
+        numeric_cols = ['未来3个月月均用量', '过去6个月月均用量', '安全库存量', '实际库存', '预测库存']
+        for col in numeric_cols:
+            if col in df_display.columns:
+                df_display[col] = pd.to_numeric(df_display[col], errors='coerce').fillna(0)
+        
         # 确保必要的列存在
-        if '安全库存量' not in df_display.columns:
-            df_display['安全库存量'] = 300
+        if '安全库存量' not in df_display.columns or df_display['安全库存量'].sum() == 0:
+            df_display['安全库存量'] = df_display['未来3个月月均用量'] * 1.5
+            df_display['安全库存量'] = df_display['安全库存量'].round(2)
         
         if '实际库存' not in df_display.columns:
             df_display['实际库存'] = df_display['安全库存量'] * np.random.uniform(0.5, 1.8, len(df_display))
@@ -395,15 +440,14 @@ def main():
             df_display['预测库存'] = df_display['安全库存量'] * np.random.uniform(0.6, 1.5, len(df_display))
             df_display['预测库存'] = df_display['预测库存'].round(2)
         
-        # 合并库存数据（用实际库存覆盖）
+        # 合并库存数据
         if st.session_state.inventory_data is not None:
             st.session_state.inventory_data['物料编码'] = st.session_state.inventory_data['物料编码'].astype(str)
-            # 合并前先确保物料编码匹配
             df_display = df_display.merge(st.session_state.inventory_data, on='物料编码', how='left', suffixes=('', '_inv'))
             if '实际库存_inv' in df_display.columns:
                 df_display['实际库存'] = df_display['实际库存_inv'].fillna(df_display['实际库存'])
                 df_display.drop(columns=['实际库存_inv'], inplace=True)
-            df_display['实际库存'] = df_display['实际库存'].round(2)
+            df_display['实际库存'] = pd.to_numeric(df_display['实际库存'], errors='coerce').fillna(0).round(2)
         
         # 合并预测数据
         if st.session_state.forecast_data is not None:
@@ -412,7 +456,7 @@ def main():
             if '预测库存_fore' in df_display.columns:
                 df_display['预测库存'] = df_display['预测库存_fore'].fillna(df_display['预测库存'])
                 df_display.drop(columns=['预测库存_fore'], inplace=True)
-            df_display['预测库存'] = df_display['预测库存'].round(2)
+            df_display['预测库存'] = pd.to_numeric(df_display['预测库存'], errors='coerce').fillna(0).round(2)
         
         # 计算库存差异
         df_display['库存差异(实际-安全)'] = df_display['实际库存'] - df_display['安全库存量']
@@ -424,12 +468,14 @@ def main():
         if st.session_state.usage_data is not None:
             st.session_state.usage_data['物料编码'] = st.session_state.usage_data['物料编码'].astype(str)
             df_display = df_display.merge(st.session_state.usage_data, on='物料编码', how='left')
-            df_display['日均消耗'] = df_display['日均消耗'].fillna(df_display['过去6个月月均用量'] / 30 if '过去6个月月均用量' in df_display.columns else 10)
-        else:
-            if '过去6个月月均用量' in df_display.columns:
-                df_display['日均消耗'] = df_display['过去6个月月均用量'] / 30
+            if '日均消耗' in df_display.columns:
+                df_display['日均消耗'] = pd.to_numeric(df_display['日均消耗'], errors='coerce').fillna(
+                    df_display['过去6个月月均用量'] / 30 if '过去6个月月均用量' in df_display.columns else 10
+                )
             else:
-                df_display['日均消耗'] = 10
+                df_display['日均消耗'] = df_display['过去6个月月均用量'] / 30 if '过去6个月月均用量' in df_display.columns else 10
+        else:
+            df_display['日均消耗'] = df_display['过去6个月月均用量'] / 30 if '过去6个月月均用量' in df_display.columns else 10
         
         # ====================================================================
         # Tab布局
