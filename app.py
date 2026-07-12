@@ -1,4 +1,4 @@
-# app.py - 适配您的Excel格式
+# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,6 +8,7 @@ import io
 from datetime import datetime
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
+import re
 
 st.set_page_config(
     page_title="安全库存管理系统",
@@ -53,78 +54,88 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+def clean_material_code(code):
+    """清洗物料编码，统一格式"""
+    if pd.isna(code):
+        return ""
+    # 转为字符串
+    code = str(code).strip()
+    # 移除特殊字符，保留数字和字母
+    code = re.sub(r'[^\w\-\.]', '', code)
+    return code
+
 @st.cache_data
 def load_safety_stock(file):
     """加载安全库存模板 - 适配您的Excel格式"""
     try:
         df = pd.read_excel(file)
+        st.info(f"📄 安全库存文件列名: {df.columns.tolist()}")
         
         # 统一物料编码为字符串
         if '物料编码' in df.columns:
-            df['物料编码'] = df['物料编码'].astype(str)
+            df['物料编码'] = df['物料编码'].apply(clean_material_code)
+        elif 'SAP编码' in df.columns:
+            df.rename(columns={'SAP编码': '物料编码'}, inplace=True)
+            df['物料编码'] = df['物料编码'].apply(clean_material_code)
+        else:
+            st.error("❌ 找不到物料编码列，请确保Excel中有'物料编码'或'SAP编码'列")
+            return None
         
-        # 检查是否有M01~M09列（原始历史用量）
+        # 检查是否有M01~M09列
         month_cols = ['M01', 'M02', 'M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09']
         has_month_cols = all(col in df.columns for col in month_cols)
         
         if not has_month_cols:
-            # 如果Excel没有M01~M09，尝试使用已有的计算字段
             st.info("📌 检测到您的Excel已包含计算结果，直接使用现有数据")
             
             # 映射列名
-            column_mapping = {}
-            
             # 未来3个月月均用量
-            if '未来3个月月均用量' in df.columns:
-                pass  # 已经有这个列
-            elif '未来3月月均用量' in df.columns:
-                df.rename(columns={'未来3月月均用量': '未来3个月月均用量'}, inplace=True)
+            if '未来3个月月均用量' not in df.columns:
+                if '未来3月月均用量' in df.columns:
+                    df.rename(columns={'未来3月月均用量': '未来3个月月均用量'}, inplace=True)
+                elif '月均量(3个月)' in df.columns:
+                    df.rename(columns={'月均量(3个月)': '未来3个月月均用量'}, inplace=True)
             
             # 过去6个月月均用量
-            if '月均量(半年)' in df.columns:
-                df.rename(columns={'月均量(半年)': '过去6个月月均用量'}, inplace=True)
+            if '过去6个月月均用量' not in df.columns:
+                if '月均量(半年)' in df.columns:
+                    df.rename(columns={'月均量(半年)': '过去6个月月均用量'}, inplace=True)
+                elif '月均量(6个月)' in df.columns:
+                    df.rename(columns={'月均量(6个月)': '过去6个月月均用量'}, inplace=True)
             
-            # 平均交货周期
-            if '平均交货周期(天)' in df.columns:
-                # 将天数转换为周数
-                df['平均交货周期'] = df['平均交货周期(天)'].apply(
-                    lambda x: f"{int(round(x/7, 0))}周" if pd.notna(x) else '2周'
-                )
+            # 平均交货周期 - 将天数转换为周数
+            if '平均交货周期' not in df.columns:
+                if '平均交货周期(天)' in df.columns:
+                    df['平均交货周期'] = df['平均交货周期(天)'].apply(
+                        lambda x: f"{int(round(x/7, 0))}周" if pd.notna(x) and x > 0 else '2周'
+                    )
             
             # 质量风险系数
-            if '原辅料质量等级风险' in df.columns:
-                df.rename(columns={'原辅料质量等级风险': '质量风险系数'}, inplace=True)
+            if '质量风险系数' not in df.columns:
+                if '原辅料质量等级风险' in df.columns:
+                    df.rename(columns={'原辅料质量等级风险': '质量风险系数'}, inplace=True)
+                elif '质量风险等级' in df.columns:
+                    df.rename(columns={'质量风险等级': '质量风险系数'}, inplace=True)
             
             # 品类策略系数
-            if '品类策略风险系数' in df.columns:
-                df.rename(columns={'品类策略风险系数': '品类策略系数'}, inplace=True)
+            if '品类策略系数' not in df.columns:
+                if '品类策略风险系数' in df.columns:
+                    df.rename(columns={'品类策略风险系数': '品类策略系数'}, inplace=True)
             
-            # 采购周期系数
-            if '采购周期系数' in df.columns:
-                pass  # 已有
-            
-            # 如果没有安全库存量，计算它
+            # 计算安全库存量（如果不存在）
             if '安全库存量' not in df.columns:
-                # 使用现有数据计算
                 quality_risk_map = {'高': 1.5, '中': 1.2, '低': 1.0}
-                if '质量风险系数' in df.columns:
-                    df['质量风险系数_数值'] = df['质量风险系数'].map(quality_risk_map).fillna(1.0)
-                else:
-                    df['质量风险系数_数值'] = 1.0
-                
                 category_map = {'A类': 1.3, 'B类': 1.1, 'C类': 0.9, 'D类': 0.7}
-                if '品类策略系数' in df.columns:
-                    df['品类策略系数_数值'] = df['品类策略系数'].map(category_map).fillna(1.0)
-                else:
-                    df['品类策略系数_数值'] = 1.0
+                lead_time_map = {'1周': 1.2, '2周': 1.4, '3周': 1.6, '4周': 1.8, '5周': 2.0, '6周': 2.2}
                 
-                if '未来3个月月均用量' in df.columns and '平均交货周期' in df.columns:
-                    lead_time_map = {'1周': 1.2, '2周': 1.4, '3周': 1.6, '4周': 1.8, '5周': 2.0, '6周': 2.2}
-                    df['采购周期系数_数值'] = df['平均交货周期'].map(lead_time_map).fillna(1.5)
-                    
+                df['质量风险系数_数值'] = df.get('质量风险系数', '中').map(quality_risk_map).fillna(1.0)
+                df['品类策略系数_数值'] = df.get('品类策略系数', 'B类').map(category_map).fillna(1.0)
+                df['采购周期系数'] = df.get('平均交货周期', '2周').map(lead_time_map).fillna(1.5)
+                
+                if '未来3个月月均用量' in df.columns:
                     df['安全库存量'] = (
                         df['未来3个月月均用量'] * 
-                        df['采购周期系数_数值'] * 
+                        df['采购周期系数'] * 
                         df['质量风险系数_数值'] * 
                         df['品类策略系数_数值']
                     ).round(2)
@@ -140,13 +151,34 @@ def load_inventory(file):
     """加载6.1库存文件"""
     try:
         df = pd.read_excel(file, sheet_name='Data')
-        df_qualified = df[df['存储地点'] == 3006].copy()
-        inventory_summary = df_qualified.groupby('物料')['非限制使用的库存'].sum().reset_index()
-        inventory_summary.columns = ['物料编码', '实际库存']
-        inventory_summary['物料编码'] = inventory_summary['物料编码'].astype(str)
+        st.info(f"📄 库存文件列名: {df.columns.tolist()}")
+        
+        # 筛选合格仓（3006）
+        if '存储地点' in df.columns:
+            df_qualified = df[df['存储地点'] == 3006].copy()
+        else:
+            df_qualified = df.copy()
+            st.warning("⚠️ 未找到'存储地点'列，使用全部数据")
+        
+        # 按物料汇总库存
+        if '物料' in df_qualified.columns:
+            inventory_summary = df_qualified.groupby('物料')['非限制使用的库存'].sum().reset_index()
+            inventory_summary.columns = ['物料编码', '实际库存']
+        elif '物料编码' in df_qualified.columns:
+            inventory_summary = df_qualified.groupby('物料编码')['非限制使用的库存'].sum().reset_index()
+            inventory_summary.columns = ['物料编码', '实际库存']
+        else:
+            st.warning("⚠️ 找不到物料列，尝试使用第一列作为物料编码")
+            first_col = df_qualified.columns[0]
+            inventory_summary = df_qualified.groupby(first_col)['非限制使用的库存'].sum().reset_index()
+            inventory_summary.columns = ['物料编码', '实际库存']
+        
+        # 统一物料编码为字符串
+        inventory_summary['物料编码'] = inventory_summary['物料编码'].apply(clean_material_code)
+        
         return inventory_summary
     except Exception as e:
-        st.error(f"加载库存文件失败: {e}")
+        st.warning(f"⚠️ 加载库存文件失败: {e}，将使用模拟数据")
         return None
 
 @st.cache_data
@@ -154,8 +186,10 @@ def load_usage(file):
     """加载月度使用量文件"""
     try:
         df = pd.read_excel(file)
+        st.info(f"📄 使用量文件列名: {df.columns.tolist()}")
+        
         if '物料编码' in df.columns and '日期' in df.columns:
-            df['物料编码'] = df['物料编码'].astype(str)
+            df['物料编码'] = df['物料编码'].apply(clean_material_code)
             df['月份'] = pd.to_datetime(df['日期']).dt.month
             monthly_usage = df.groupby(['物料编码', '月份'])['消耗量'].sum().reset_index()
             days_in_month = {1:31, 2:28, 3:31, 4:30, 5:31, 6:30, 
@@ -170,7 +204,7 @@ def load_usage(file):
         else:
             return None
     except Exception as e:
-        st.error(f"加载使用量文件失败: {e}")
+        st.warning(f"⚠️ 加载使用量文件失败: {e}")
         return None
 
 @st.cache_data
@@ -178,8 +212,17 @@ def load_forecast(file):
     """加载预测库存文件"""
     try:
         df = pd.read_excel(file)
+        st.info(f"📄 预测文件列名: {df.columns.tolist()}")
+        
         if '物料编码' in df.columns:
-            df['物料编码'] = df['物料编码'].astype(str)
+            df['物料编码'] = df['物料编码'].apply(clean_material_code)
+            forecast_col = [col for col in df.columns if '预测' in col or '库存' in col][0]
+            forecast_summary = df[['物料编码', forecast_col]].copy()
+            forecast_summary.columns = ['物料编码', '预测库存']
+            return forecast_summary
+        elif '物料' in df.columns:
+            df.rename(columns={'物料': '物料编码'}, inplace=True)
+            df['物料编码'] = df['物料编码'].apply(clean_material_code)
             forecast_col = [col for col in df.columns if '预测' in col or '库存' in col][0]
             forecast_summary = df[['物料编码', forecast_col]].copy()
             forecast_summary.columns = ['物料编码', '预测库存']
@@ -187,11 +230,11 @@ def load_forecast(file):
         else:
             return None
     except Exception as e:
-        st.error(f"加载预测文件失败: {e}")
+        st.warning(f"⚠️ 加载预测文件失败: {e}")
         return None
 
 def load_mock_data():
-    """生成模拟数据"""
+    """生成模拟数据（用于演示）"""
     np.random.seed(42)
     materials = [f'MAT-{i:04d}' for i in range(1, 51)]
     data = []
@@ -208,7 +251,6 @@ def load_mock_data():
             '质量风险系数': np.random.choice(['高', '中', '低'], p=[0.2, 0.5, 0.3]),
             '品类策略系数': np.random.choice(['A类', 'B类', 'C类'], p=[0.2, 0.4, 0.4]),
         }
-        # 计算安全库存量
         quality_risk_map = {'高': 1.5, '中': 1.2, '低': 1.0}
         category_map = {'A类': 1.3, 'B类': 1.1, 'C类': 0.9, 'D类': 0.7}
         lead_time_map = {'1周': 1.2, '2周': 1.4, '3周': 1.6, '4周': 1.8, '5周': 2.0, '6周': 2.2}
@@ -218,7 +260,7 @@ def load_mock_data():
             lead_time_map.get(row['平均交货周期'], 1.5) *
             quality_risk_map.get(row['质量风险系数'], 1.0) *
             category_map.get(row['品类策略系数'], 1.0)
-        )
+        ).round(2)
         data.append(row)
     return pd.DataFrame(data)
 
@@ -271,6 +313,7 @@ def main():
     st.markdown(f'<span class="monthly-update-badge">📅 {current_month} 月度报告</span>', unsafe_allow_html=True)
     st.markdown("---")
     
+    # 初始化session state
     if 'safety_data' not in st.session_state:
         st.session_state.safety_data = None
     if 'template_columns' not in st.session_state:
@@ -362,6 +405,11 @@ def main():
                 use_container_width=True
             )
     
+    # ========================================================================
+    # 加载数据 - 每个文件独立加载，失败不影响其他
+    # ========================================================================
+    
+    # 1. 加载安全库存数据（必须）
     if safety_stock_file is not None:
         try:
             df = load_safety_stock(safety_stock_file)
@@ -370,8 +418,13 @@ def main():
                 st.session_state.safety_data = df
                 st.session_state.last_update = datetime.now().strftime('%Y-%m-%d %H:%M')
                 st.sidebar.success(f"✅ 已加载 {len(df)} 条物料数据")
+            else:
+                st.error("❌ 安全库存数据加载失败，使用模拟数据")
+                df = load_mock_data()
+                st.session_state.template_columns = df.columns.tolist()
+                st.session_state.safety_data = df
         except Exception as e:
-            st.error(f"数据加载失败: {e}")
+            st.error(f"❌ 数据加载失败: {e}")
             df = load_mock_data()
             st.session_state.template_columns = df.columns.tolist()
             st.session_state.safety_data = df
@@ -382,62 +435,116 @@ def main():
             st.session_state.safety_data = df
             st.sidebar.info("ℹ️ 使用模拟数据")
     
+    # 2. 加载库存数据（可选）
     if inventory_file is not None:
         st.session_state.inventory_data = load_inventory(inventory_file)
+        if st.session_state.inventory_data is not None:
+            st.sidebar.success(f"✅ 已加载库存数据: {len(st.session_state.inventory_data)} 条")
+        else:
+            st.sidebar.warning("⚠️ 库存数据加载失败，使用模拟数据")
+    
+    # 3. 加载使用量数据（可选）
     if usage_file is not None:
         st.session_state.usage_data = load_usage(usage_file)
+        if st.session_state.usage_data is not None:
+            st.sidebar.success(f"✅ 已加载使用量数据: {len(st.session_state.usage_data)} 条")
+    
+    # 4. 加载预测数据（可选）
     if forecast_file is not None:
         st.session_state.forecast_data = load_forecast(forecast_file)
+        if st.session_state.forecast_data is not None:
+            st.sidebar.success(f"✅ 已加载预测数据: {len(st.session_state.forecast_data)} 条")
+    
+    # ========================================================================
+    # 显示结果
+    # ========================================================================
     
     if st.session_state.safety_data is not None:
         df_display = st.session_state.safety_data.copy()
         if '物料编码' in df_display.columns:
-            df_display['物料编码'] = df_display['物料编码'].astype(str)
+            df_display['物料编码'] = df_display['物料编码'].apply(clean_material_code)
         
-        # 合并库存数据
-        if st.session_state.inventory_data is not None:
-            st.session_state.inventory_data['物料编码'] = st.session_state.inventory_data['物料编码'].astype(str)
-            df_display = df_display.merge(st.session_state.inventory_data, on='物料编码', how='left')
-            df_display['实际库存'] = df_display['实际库存'].fillna(0)
+        # 合并库存数据（如果有）
+        if st.session_state.inventory_data is not None and not st.session_state.inventory_data.empty:
+            try:
+                st.session_state.inventory_data['物料编码'] = st.session_state.inventory_data['物料编码'].apply(clean_material_code)
+                df_display = df_display.merge(st.session_state.inventory_data, on='物料编码', how='left')
+                df_display['实际库存'] = df_display['实际库存'].fillna(0)
+                st.sidebar.info("📊 已合并库存数据")
+            except Exception as e:
+                st.warning(f"⚠️ 合并库存数据失败: {e}，使用模拟库存")
+                np.random.seed(42)
+                if '安全库存量' in df_display.columns:
+                    df_display['实际库存'] = df_display['安全库存量'] * np.random.uniform(0.5, 1.8, len(df_display))
+                else:
+                    df_display['实际库存'] = 0
+                df_display['实际库存'] = df_display['实际库存'].round(2)
         else:
+            # 生成模拟库存
             np.random.seed(42)
             if '安全库存量' in df_display.columns:
                 df_display['实际库存'] = df_display['安全库存量'] * np.random.uniform(0.5, 1.8, len(df_display))
             else:
                 df_display['实际库存'] = 0
             df_display['实际库存'] = df_display['实际库存'].round(2)
+            st.sidebar.info("📊 使用模拟库存数据")
         
-        if st.session_state.forecast_data is not None:
-            st.session_state.forecast_data['物料编码'] = st.session_state.forecast_data['物料编码'].astype(str)
-            df_display = df_display.merge(st.session_state.forecast_data, on='物料编码', how='left')
-            df_display['预测库存'] = df_display['预测库存'].fillna(0)
+        # 合并预测数据（如果有）
+        if st.session_state.forecast_data is not None and not st.session_state.forecast_data.empty:
+            try:
+                st.session_state.forecast_data['物料编码'] = st.session_state.forecast_data['物料编码'].apply(clean_material_code)
+                df_display = df_display.merge(st.session_state.forecast_data, on='物料编码', how='left')
+                df_display['预测库存'] = df_display['预测库存'].fillna(0)
+                st.sidebar.info("📊 已合并预测数据")
+            except Exception as e:
+                st.warning(f"⚠️ 合并预测数据失败: {e}，使用模拟预测")
+                np.random.seed(42)
+                if '安全库存量' in df_display.columns:
+                    df_display['预测库存'] = df_display['安全库存量'] * np.random.uniform(0.6, 1.5, len(df_display))
+                else:
+                    df_display['预测库存'] = 0
+                df_display['预测库存'] = df_display['预测库存'].round(2)
         else:
+            # 生成模拟预测
             np.random.seed(42)
             if '安全库存量' in df_display.columns:
                 df_display['预测库存'] = df_display['安全库存量'] * np.random.uniform(0.6, 1.5, len(df_display))
             else:
                 df_display['预测库存'] = 0
             df_display['预测库存'] = df_display['预测库存'].round(2)
+            st.sidebar.info("📊 使用模拟预测数据")
         
+        # 计算库存差异
         if '安全库存量' in df_display.columns and '实际库存' in df_display.columns:
             df_display['库存差异(实际-安全)'] = df_display['实际库存'] - df_display['安全库存量']
             df_display['库存状态'] = df_display['库存差异(实际-安全)'].apply(
                 lambda x: '✅ 充足' if x >= 0 else '⚠️ 预警'
             )
         
-        if st.session_state.usage_data is not None:
-            st.session_state.usage_data['物料编码'] = st.session_state.usage_data['物料编码'].astype(str)
-            df_display = df_display.merge(st.session_state.usage_data, on='物料编码', how='left')
-            if '过去6个月月均用量' in df_display.columns:
-                df_display['日均消耗'] = df_display['日均消耗'].fillna(df_display['过去6个月月均用量'] / 30)
-            else:
-                df_display['日均消耗'] = df_display['日均消耗'].fillna(10)
+        # 合并使用量数据（如果有）
+        if st.session_state.usage_data is not None and not st.session_state.usage_data.empty:
+            try:
+                st.session_state.usage_data['物料编码'] = st.session_state.usage_data['物料编码'].apply(clean_material_code)
+                df_display = df_display.merge(st.session_state.usage_data, on='物料编码', how='left')
+                if '过去6个月月均用量' in df_display.columns:
+                    df_display['日均消耗'] = df_display['日均消耗'].fillna(df_display['过去6个月月均用量'] / 30)
+                else:
+                    df_display['日均消耗'] = df_display['日均消耗'].fillna(10)
+            except Exception as e:
+                st.warning(f"⚠️ 合并使用量数据失败: {e}")
+                if '未来3个月月均用量' in df_display.columns:
+                    df_display['日均消耗'] = df_display['未来3个月月均用量'] / 30
+                else:
+                    df_display['日均消耗'] = 10
         else:
             if '未来3个月月均用量' in df_display.columns:
                 df_display['日均消耗'] = df_display['未来3个月月均用量'] / 30
             else:
                 df_display['日均消耗'] = 10
         
+        # ====================================================================
+        # Tab布局
+        # ====================================================================
         tab1, tab2, tab3, tab4 = st.tabs([
             "📋 数据概览",
             "📊 库存状态分析",
@@ -445,6 +552,7 @@ def main():
             "📈 消耗趋势"
         ])
         
+        # --- Tab 1: 数据概览 ---
         with tab1:
             col1, col2, col3, col4 = st.columns(4)
             with col1:
@@ -468,13 +576,18 @@ def main():
             
             st.markdown("---")
             
+            # 显示数据表
             display_cols = ['物料编码', '物料描述', '工厂', '存储地点', '单位',
                            '未来3个月月均用量', '过去6个月月均用量', '日均消耗',
                            '安全库存量', '实际库存', '预测库存',
                            '库存差异(实际-安全)', '库存状态']
             display_cols = [col for col in display_cols if col in df_display.columns]
             st.dataframe(df_display[display_cols], use_container_width=True, height=400)
+            
+            # 显示数据来源信息
+            st.caption(f"📊 共 {len(df_display)} 条记录 | 数据更新时间: {st.session_state.last_update if st.session_state.last_update else '未更新'}")
         
+        # --- Tab 2: 库存状态分析 ---
         with tab2:
             st.markdown("### 📊 库存对比分析")
             top_n = st.slider("显示物料数量", 10, 50, 20)
@@ -502,6 +615,7 @@ def main():
                     fig_bar = px.bar(top_usage, x='物料编码', y='日均消耗', title="日均消耗TOP10")
                     st.plotly_chart(fig_bar, use_container_width=True)
         
+        # --- Tab 3: 预警列表 ---
         with tab3:
             if '库存状态' in df_display.columns:
                 warning_df = df_display[df_display['库存状态'] == '⚠️ 预警'].copy()
@@ -513,10 +627,38 @@ def main():
                     st.dataframe(warning_df[display_cols], use_container_width=True, height=400)
                 else:
                     st.success("🎉 所有物料库存充足，没有预警！")
+            else:
+                st.info("ℹ️ 暂无库存状态数据")
         
+        # --- Tab 4: 消耗趋势 ---
         with tab4:
             view_type = st.radio("查看方式", ['所有物料总趋势', '单个物料趋势'], horizontal=True)
-            st.info("💡 趋势图需要Excel中包含M01~M09的历史数据")
+            month_cols = ['M01', 'M02', 'M03', 'M04', 'M05', 'M06', 'M07', 'M08', 'M09']
+            has_month_data = all(col in df_display.columns for col in month_cols)
+            
+            if has_month_data:
+                if view_type == '所有物料总趋势':
+                    monthly_total = df_display[month_cols].abs().sum()
+                    fig = px.line(x=month_cols, y=monthly_total.values, title="所有物料总消耗趋势", markers=True)
+                    fig.update_layout(height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    material_list = df_display['物料编码'].unique().tolist()
+                    selected_material = st.selectbox("选择物料", material_list)
+                    if selected_material:
+                        material_data = df_display[df_display['物料编码'] == selected_material]
+                        values = material_data[month_cols].abs().values.flatten()
+                        fig = px.line(x=month_cols, y=values, title=f"物料 {selected_material} 消耗趋势", markers=True)
+                        fig.update_layout(height=400)
+                        st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("💡 趋势图需要Excel中包含M01~M09的历史数据，当前使用模拟数据")
+                # 使用模拟数据生成趋势图
+                mock_months = [f'M{i:02d}' for i in range(1, 10)]
+                mock_values = np.random.uniform(100, 500, 9)
+                fig = px.line(x=mock_months, y=mock_values, title="模拟消耗趋势", markers=True)
+                fig.update_layout(height=400)
+                st.plotly_chart(fig, use_container_width=True)
 
 if __name__ == "__main__":
     main()
